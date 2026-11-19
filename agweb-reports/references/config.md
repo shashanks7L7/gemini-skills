@@ -19,28 +19,36 @@ The skill is pre-configured to communicate directly with the Reset Admin.Api bac
 
 ## Token-Only Credential Storage & Security
 
-To ensure maximum security and privacy:
-1. **No Username or Password Storage**:
-   - The user's username and password are **never saved to disk or system variables**.
-   - Credentials entered during authentication are used strictly in memory to compute the standard HTTP Basic Auth header token (`Basic <base64(user:pass)>`), after which the raw credentials are discarded.
+To ensure maximum security, transparency, and credential isolation:
+1. **No Plaintext Password Files on Disk**:
+   - The user's plaintext password is **never saved to disk files, vaults, or configuration files**.
+   - Credentials entered during authentication are used strictly in memory to compute the standard HTTP Basic Auth header token (`Basic <base64(user:pass)>`), after which raw credentials are discarded.
 
-2. **Windows User Environment Variable**:
+2. **Windows User Environment Variable & Security Transparency**:
    - Only the computed Basic Auth header token is saved in the Windows User Environment Variable:
      ```
      AGWEB_REPORTS_BASIC_AUTH = "Basic <base64>"
      ```
    - This variable is stored in the Windows User registry hive (`HKEY_CURRENT_USER\Environment`), accessible exclusively by your logged-in Windows user account.
-   - No vault files or password files exist on disk (`~/.agweb-reports` contains zero credential files).
+   - **Security Transparency Notice**: Base64 is an encoding, not an encryption cipher. Any process running under your logged-in Windows user session can decode this environment variable. For strict isolation, avoid running untrusted scripts in the same Windows user session.
+   - **Zero CLI Password Exposure**: Passwords should never be supplied as CLI arguments (which would be logged in Windows Security Event 4688 / Sysmon Event 1). Passwords are provided via standard input stream (`--stdin`) or interactive prompt.
 
 3. **Security Audit Command**:
-   - You can audit the system at any time to verify that no username or password is stored anywhere:
+   - You can audit the system at any time to verify that no username or password is stored in plaintext:
      ```bash
      node scripts/auth.cjs audit
      ```
    - Confirms that `AGWEB_REPORTS_USER` is empty, `AGWEB_REPORTS_PASS` is empty, and no credential files exist on disk.
 
-4. **Re-Authentication Flow**:
-   - If Admin.Api returns `HTTP 401 Unauthorized` (`realm="Reset"`), the skill prompts for updated credentials, verifies the new token against `/api/account/GetAuthenticatedUser`, and overwrites `AGWEB_REPORTS_BASIC_AUTH`.
+4. **Re-Authentication and Token Overwrite Flow**:
+   - If user credentials change, or if Admin.Api returns `HTTP 401 Unauthorized` (`realm="Reset"`):
+     1. Prompt for updated standard LDAP username and new password via `ask_user`.
+     2. Execute securely via stdin pipe:
+        ```bash
+        "$NEW_PASSWORD" | node scripts/auth.cjs update --username "<STANDARD_USER>" --stdin --test
+        ```
+     3. This purges old tokens everywhere (User Registry, Process environment, and local config caches), computes and saves the fresh Basic Auth token to `AGWEB_REPORTS_BASIC_AUTH`, and immediately verifies against `/api/account/GetAuthenticatedUser`.
+     4. If the user lacks `Policies.ViewAgRunData`, Admin.Api returns HTTP 403 Forbidden (Exit code 3). Contact AGWeb administrators to request read access.
 
 ---
 

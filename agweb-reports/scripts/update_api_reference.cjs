@@ -145,11 +145,16 @@ async function discoverSwaggerDocsUrl(swaggerUiUrl, fallbackUrl) {
       const match = res.body.match(/"urls"\s*:\s*\[\s*\{\s*"url"\s*:\s*"([^"]+)"/);
       if (match && match[1]) {
         const rawUrl = match[1];
-        if (rawUrl.startsWith('http://') || rawUrl.startsWith('https://')) {
-          return rawUrl;
-        }
         const parsedBase = new URL(swaggerUiUrl);
-        return `${parsedBase.origin}${rawUrl.startsWith('/') ? '' : '/'}${rawUrl}`;
+        const parsedDocs = new URL(rawUrl, parsedBase.origin);
+
+        // Security Host Pinning: Ensure discovered docs URL stays within Osttra corporate domains
+        if (parsedDocs.hostname !== parsedBase.hostname && !parsedDocs.hostname.endsWith('.osttra.xyz')) {
+          process.stderr.write(`Security Warning: Discovered docs URL '${rawUrl}' points to unexpected host '${parsedDocs.hostname}'. Defaulting to fallback.\n`);
+          return fallbackUrl;
+        }
+
+        return parsedDocs.href;
       }
     }
   } catch (_) {

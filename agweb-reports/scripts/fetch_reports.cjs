@@ -37,20 +37,13 @@ const https = require('node:https');
 const { getCredentials, getAgwebApiUrl } = require('./auth.cjs');
 const { verifyCompanyNetwork } = require('./check_network.cjs');
 
-// Blocklist of mutating keywords to ensure STRICT READ-ONLY safety
-const MUTATING_PATTERNS = [
-  /import/i,
-  /update/i,
-  /execute/i,
-  /save/i,
-  /copy/i,
-  /delete/i,
-  /post/i,
-  /put/i,
-  /patch/i,
-  /edit/i,
-  /mutate/i
-];
+// Strict allowlist of permitted non-report read-only endpoints (lowercase)
+const STRICT_ALLOWED_EXTRA_PATHS = new Set([
+  '/api/account/getauthenticateduser',
+  '/api/run/getruncurrencyinfo',
+  '/api/v1/runorchestration/getruns',
+  '/health'
+]);
 
 // Mapping of friendly report names to Admin.Api controller actions
 const REPORT_ACTION_MAP = {
@@ -113,6 +106,9 @@ function parseArgs() {
   } else if (args[0] === 'update-ref' || args[0] === 'update-reference') {
     command = 'update-ref';
     args.shift();
+  } else if (args[0] === 'reauth' || args[0] === 'update-auth') {
+    command = 'reauth';
+    args.shift();
   }
 
   const options = {
@@ -120,6 +116,8 @@ function parseArgs() {
     type: 'summary',
     runId: null,
     currency: null,
+    username: null,
+    password: null,
     query: '',
     endpoint: null,
     env: null,
@@ -132,7 +130,11 @@ function parseArgs() {
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
-    if ((arg === '--type' || arg === '-t') && args[i + 1]) {
+    if ((arg === '--username' || arg === '-u') && args[i + 1]) {
+      options.username = args[++i];
+    } else if ((arg === '--password' || arg === '-p') && args[i + 1]) {
+      options.password = args[++i];
+    } else if ((arg === '--type' || arg === '-t') && args[i + 1]) {
       options.type = args[++i].toLowerCase();
     } else if ((arg === '--run-id' || arg === '-r') && args[i + 1]) {
       options.runId = parseInt(args[++i], 10);
@@ -176,15 +178,57 @@ function parseArgs() {
   return options;
 }
 
+// Set of all allowed report actions (all lowercase for case-insensitive matching)
+const ALLOWED_REPORT_ACTIONS = new Set(
+  Object.values(REPORT_ACTION_MAP).map((a) => a.toLowerCase())
+);
+
 /**
- * Enforces STRICTLY READ-ONLY safety on all API paths.
+ * Enforces a STRICT ALLOWLIST for read-only safety on all API paths.
+ * Replaces vulnerable mutating regex blocklists with an explicit allowlist:
+ * 1. Must be a known GET report action under /api/reports/Get...
+ * 2. Or must be explicitly listed in STRICT_ALLOWED_EXTRA_PATHS.
+ * Rejects path traversal (..) and all unverified controllers/actions.
  */
 function assertReadOnlyPath(apiPath) {
-  for (const pattern of MUTATING_PATTERNS) {
-    if (pattern.test(apiPath)) {
-      throw new Error(`SECURITY_VIOLATION: Skill is STRICTLY READ-ONLY. Path '${apiPath}' contains prohibited mutating action '${pattern}'. Only read-only GET queries are allowed.`);
+  if (!apiPath || typeof apiPath !== 'string') {
+    throw new Error('SECURITY_VIOLATION: API path must be a non-empty string.');
+  }
+
+  // Prevent path traversal and protocol injection
+  if (apiPath.includes('..') || apiPath.includes('\\') || apiPath.includes(':') || apiPath.includes('//')) {
+    throw new Error(`SECURITY_VIOLATION: Path traversal or protocol injection detected in path: '${apiPath}'.`);
+  }
+
+  // Normalize path and extract pathname without query string
+  const cleanPath = apiPath.split('?')[0].trim().toLowerCase();
+  const normalizedPath = cleanPath.startsWith('/') ? cleanPath : `/${cleanPath}`;
+
+  // Check 1: Known extra read-only endpoints
+  if (STRICT_ALLOWED_EXTRA_PATHS.has(normalizedPath)) {
+    return;
+  }
+
+  // Check 2: Must be an authorized report endpoint under /api/reports/
+  if (normalizedPath.startsWith('/api/reports/')) {
+    const actionSeg = normalizedPath.replace('/api/reports/', '').split('/')[0];
+    // Must begin with 'get' (strictly GET read action)
+    if (!actionSeg.startsWith('get')) {
+      throw new Error(`SECURITY_VIOLATION: Non-GET action '${actionSeg}' is prohibited. Only read-only 'Get*' actions under /api/reports/ are permitted.`);
+    }
+    // Must be in verified allowed report actions or follow valid Get[a-z0-9] naming
+    if (ALLOWED_REPORT_ACTIONS.has(actionSeg) || /^get[a-z0-9]+$/i.test(actionSeg)) {
+      return;
     }
   }
+
+  // Check 3: Raw action name passed
+  const cleanAction = cleanPath.replace(/^\/+/, '');
+  if (ALLOWED_REPORT_ACTIONS.has(cleanAction)) {
+    return;
+  }
+
+  throw new Error(`SECURITY_VIOLATION: Endpoint '${apiPath}' is NOT on the strict read-only allowlist. Only verified GET report actions under /api/reports/Get* are permitted.`);
 }
 
 /**
@@ -373,6 +417,13 @@ async function queryAdminApi(baseUrl, apiPath, creds) {
                 authFailed: true,
                 message: 'HTTP 401 Unauthorized: Reset Admin.Api rejected Basic Auth credentials (realm="Reset").'
               });
+            } else if (res.statusCode === 403) {
+              resolve({
+                ok: false,
+                statusCode: 403,
+                forbidden: true,
+                message: 'HTTP 403 Forbidden: Authenticated user lacks required Policies.ViewAgRunData role claim.'
+              });
             } else if (res.statusCode >= 200 && res.statusCode < 300) {
               try {
                 const parsedJson = JSON.parse(body);
@@ -453,6 +504,25 @@ async function main() {
       process.exit(0);
     }
 
+    // Handle standalone command: reauth
+    if (options.command === 'reauth') {
+      const { overwriteCredentials, getCredentials, testCredentials } = require('./auth.cjs');
+      if (!options.username || !options.password) {
+        console.error('Failure: Missing credentials. Usage: node scripts/fetch_reports.cjs reauth --username <user> --password <pass>');
+        process.exit(1);
+      }
+      const updateRes = overwriteCredentials(options.username, options.password);
+      process.stderr.write(`Notice: Basic Auth token overwritten everywhere (${updateRes.savedTo}). Stored account: '${updateRes.account}'.\n`);
+      const creds = getCredentials();
+      const testRes = await testCredentials(creds, options);
+      if (!testRes.ok && testRes.code === 401) {
+        console.error(`Failure: REAUTH_FAILED (HTTP 401)\nReset Admin.Api rejected the provided credentials.`);
+        process.exit(2);
+      }
+      console.log(JSON.stringify({ success: true, message: testRes.message, account: updateRes.account }, null, 2));
+      process.exit(0);
+    }
+
     // Step 1: Corporate Network Verification
     if (!options.skipNetworkCheck) {
       const netCheck = await verifyCompanyNetwork({ mock: options.mock });
@@ -519,11 +589,16 @@ async function main() {
     const apiPath = resolveApiPath(options);
     const response = await queryAdminApi(baseUrl, apiPath, creds);
 
-    // Step 4: Handle Response & Re-Authentication on 401
+    // Step 4: Handle Response & Re-Authentication on 401 / 403
     if (!response.ok) {
       if (response.authFailed || response.statusCode === 401) {
-        console.error('Failure: AUTH_FAILED\nHTTP 401 Unauthorized: The stored Reset credentials were rejected or have expired. Please re-authenticate using `node scripts/auth.cjs set --username <user> --password <pass>`.');
+        console.error('Failure: AUTH_FAILED (HTTP 401 Unauthorized)\nThe stored Reset Basic Auth token was rejected or has expired (user credentials have changed).\nACTION_REQUIRED: Prompt the user for updated credentials and overwrite tokens everywhere using:\n  node scripts/auth.cjs update --username <user> --stdin --test');
         process.exit(2);
+      }
+
+      if (response.forbidden || response.statusCode === 403) {
+        console.error('Failure: FORBIDDEN (HTTP 403 Forbidden)\nUser authenticated successfully, but lacks required role claim (Policies.ViewAgRunData) on Reset Admin.Api.\nACTION_REQUIRED: Contact Reset AGWeb administrators to request ViewAgRunData read access.');
+        process.exit(3);
       }
 
       console.error(`Failure: AGWEB_API_ERROR (HTTP ${response.statusCode || 'N/A'})\n${response.message}`);
@@ -547,5 +622,6 @@ module.exports = {
   resolveApiPath,
   queryAdminApi,
   lookupLatestRunForCurrency,
-  generateMockReport
+  generateMockReport,
+  assertReadOnlyPath
 };
