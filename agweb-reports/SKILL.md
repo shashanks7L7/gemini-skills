@@ -158,8 +158,22 @@ node scripts/fetch_reports.cjs --type summary --currency USD
 | **Run Currency Info** | `GetRunCurrencyInfo` | `--type run-info --run-id <runId>` |
 | **Arbitrary Read Action** | Any read controller action | `--endpoint "/api/reports/<Action>?..."` |
 
-- See [references/config.md](references/config.md) for Kubernetes environment routing.
+- See [references/config.md](references/config.md) for Kubernetes environment routing and Swagger documentation URLs.
 - See [references/api_reference.md](references/api_reference.md) for endpoint specifications and parameter schemas.
+
+### Automated Swagger Reference Updater
+To synchronize reporting endpoint schemas and query parameters directly from live Swagger UI documentation:
+```bash
+# Update from Production Swagger (https://prod.reset.osttra.xyz/prod/agweb/swagger/index.html)
+node scripts/update_api_reference.cjs --env prod
+
+# Or update from PATCH / Test Swagger (https://dev.reset.osttra.xyz/patch/agweb/swagger/index.html)
+node scripts/update_api_reference.cjs --env patch
+
+# Or via fetch_reports helper
+node scripts/fetch_reports.cjs update-ref --env prod
+```
+*(Strict guardrail: Only GET endpoints under `/api/reports/` are fetched; all mutating and non-reporting endpoints are excluded).*
 
 ---
 

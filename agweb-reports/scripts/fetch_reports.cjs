@@ -81,11 +81,26 @@ const REPORT_ACTION_MAP = {
   limits: 'GetOptLimitsReport',
   dv01: 'GetDv01Cascade',
   'dv01-cascade': 'GetDv01Cascade',
+  'dv01-report': 'GetDv01Report',
   'discrete-ladder': 'GetOptDiscreteLadderReport',
   'legal-warnings': 'GetLegalEntityWarnings',
   'reuters-codes': 'GetReutersCodes',
   'sef-trader': 'GetSefTraderMapping',
-  heatmap: 'GetOptHeatmapTargetDistributionReport'
+  heatmap: 'GetOptHeatmapTargetDistributionReport',
+  'opv-execution': 'GetOpvRunExecutionDealerReport',
+  'client-clearing': 'GetClientClearingTradeReport',
+  'opv-trades': 'GetOpvRunTradeReport',
+  'enrolled-portfolios': 'GetOptEnrolledPortfolioDetails',
+  'positions-metadata': 'GetOptPositionsMetadata',
+  'positions-graphical': 'GetOptPositionsGraphicalReport',
+  'dealer-summary': 'GetDealerSummaryRows',
+  'dealer-currencies': 'GetDealerCurrenciesDetails',
+  'markitwire-dealer': 'GetMarkitWireDealerDetails',
+  'rtns-dealer': 'GetRtnsDealerDetails',
+  'fxba-dealer': 'GetFxbaDealerDetails',
+  'clearport-dealer': 'GetClearPortDealerDetails',
+  'portfolio-setup': 'GetPortfolioSetupDetails',
+  'dealer-history': 'GetDealerHistory'
 };
 
 function parseArgs() {
@@ -94,6 +109,9 @@ function parseArgs() {
 
   if (args[0] === 'lookup-run' || args[0] === 'lookup' || args[0] === 'runs') {
     command = 'lookup-run';
+    args.shift();
+  } else if (args[0] === 'update-ref' || args[0] === 'update-reference') {
+    command = 'update-ref';
     args.shift();
   }
 
@@ -186,16 +204,27 @@ function resolveApiPath(options) {
     return `/api/run/GetRunCurrencyInfo?runId=${options.runId || 0}`;
   }
 
-  const action = REPORT_ACTION_MAP[options.type] || 'GetOptRunPortfolioSummaryReport';
+  let action = REPORT_ACTION_MAP[options.type];
+  if (!action) {
+    // Check if options.type directly matches an action name (case-insensitive)
+    const matched = Object.values(REPORT_ACTION_MAP).find(
+      (a) => a.toLowerCase() === options.type.toLowerCase()
+    );
+    action = matched || 'GetOptRunPortfolioSummaryReport';
+  }
   assertReadOnlyPath(action);
 
-  if (action === 'GetLegalEntityWarnings') {
+  if (action === 'GetLegalEntityWarnings' || action === 'GetOptPositionsMetadata') {
     return `/api/reports/${action}`;
   }
 
   if (action === 'GetConfirmationStatusReport' || action === 'GetConfirmationStatusSummary' || action === 'GetDealerOutstandingOrdersReport') {
     const rId = options.runId || 0;
     return `/api/reports/${action}?runIds=${rId}`;
+  }
+
+  if (action.startsWith('GetDealer') || action === 'GetPortfolioSetupDetails' || action === 'GetMarkitWireDealerDetails' || action === 'GetRtnsDealerDetails' || action === 'GetFxbaDealerDetails' || action === 'GetClearPortDealerDetails') {
+    return `/api/reports/${action}`;
   }
 
   return `/api/reports/${action}?runId=${options.runId || 0}`;
@@ -410,6 +439,18 @@ async function main() {
     // Enforce STRICT READ-ONLY safety check immediately
     if (options.endpoint) {
       assertReadOnlyPath(options.endpoint);
+    }
+
+    // Handle standalone command: update-ref
+    if (options.command === 'update-ref') {
+      const { fetchReportEndpointsFromSwagger, buildApiReferenceMarkdown } = require('./update_api_reference.cjs');
+      const env = options.env || 'prod';
+      const reportData = await fetchReportEndpointsFromSwagger(env);
+      const markdown = buildApiReferenceMarkdown(reportData);
+      const targetFile = path.resolve(__dirname, '..', 'references', 'api_reference.md');
+      fs.writeFileSync(targetFile, markdown, 'utf8');
+      console.log(`Success: Automatically updated '${targetFile}' with ${reportData.endpoints.length} GET report endpoints from ${reportData.name}.`);
+      process.exit(0);
     }
 
     // Step 1: Corporate Network Verification

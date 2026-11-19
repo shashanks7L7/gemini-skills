@@ -48,12 +48,28 @@ To ensure maximum security and privacy:
 
 The reporting site (`Admin.Api` backend and `ReactWeb` frontend) is deployed via Helm/Kubernetes manifests in `.devrun/kubernetes` with ingress routing configured on shared hosts:
 
-- **Host**: `prod.reset.osttra.xyz` (for prod instances) and `dev.reset.osttra.xyz` (for UAT and QA instances)
-- **Path Base**: `/{environment}/agweb` (e.g. `/prod/agweb`)
+- **Host**: `prod.reset.osttra.xyz` (for prod instances) and `dev.reset.osttra.xyz` (for PATCH, UAT, and QA instances)
+- **Path Base**: `/{environment}/agweb` (e.g. `/prod/agweb`, `/patch/agweb`)
 - **Supported Environments**:
   - `PROD`: `https://prod.reset.osttra.xyz/prod/agweb` (default)
-  - `PATCH`: `https://dev.reset.osttra.xyz/uat/agweb`
+  - `PATCH`: `https://dev.reset.osttra.xyz/patch/agweb` (Test / UAT)
   - `QA`: `https://dev.reset.osttra.xyz/qa/agweb`
+  - `UAT`: `https://dev.reset.osttra.xyz/uat/agweb`
+
+### Swagger UI Documentation Endpoints
+
+Live OpenAPI 3.0 / Swagger UI documentation is available for inspecting API schemas:
+- **PROD Swagger UI**: `https://prod.reset.osttra.xyz/prod/agweb/swagger/index.html`
+  - **OpenAPI JSON**: `/prod/agweb/open-api-documentation/v1/docs.json`
+- **PATCH Swagger UI**: `https://dev.reset.osttra.xyz/patch/agweb/swagger/index.html`
+  - **OpenAPI JSON**: `/patch/agweb/open-api-documentation/v1/docs.json`
+
+To automatically re-sync `references/api_reference.md` from Swagger (strictly filtering for GET report endpoints):
+```bash
+node scripts/update_api_reference.cjs --env prod
+# or
+node scripts/update_api_reference.cjs --env patch
+```
 
 ### Switching Environments
 
